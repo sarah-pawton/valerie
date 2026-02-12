@@ -1,0 +1,24 @@
+[project]
+name = "valerie-bot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "iamawatermelo", email = "144068104+iamawatermelo@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "google-genai>=1.63.0",
+    "hikari>=2.5.0",
+    "hikari-crescent>=1.4.0",
+    "hikari-miru>=4.2.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+]
+
+[project.scripts]
+valerie-bot = "valerie_bot:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
