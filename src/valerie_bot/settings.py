@@ -4,6 +4,7 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
+import sqlite3
 
 
 class Settings(BaseSettings):
@@ -14,6 +15,8 @@ class Settings(BaseSettings):
     everyone_thread: int
     owner: int
     bot_token: str
+    enable_genai: bool
+    enable_api: bool
     model_config = SettingsConfigDict(toml_file="config.toml")
 
     @classmethod
@@ -26,3 +29,7 @@ class Settings(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (TomlConfigSettingsSource(settings_cls),)
+
+
+settings: Settings = Settings()  # type: ignore
+db = sqlite3.connect("state.db")

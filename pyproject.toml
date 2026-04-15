@@ -8,12 +8,15 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.133.1",
     "google-genai>=1.63.0",
     "hikari>=2.5.0",
     "hikari-crescent>=1.4.0",
     "hikari-miru>=4.2.0",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
+    "uvicorn>=0.41.0",
+    "uvloop>=0.22.1",
 ]
 
 [project.scripts]
