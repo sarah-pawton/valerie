@@ -171,6 +171,8 @@ class Nickname:
     async def callback(self, ctx: crescent.Context) -> None:
         assert ctx.member and ctx.channel and ctx.guild
         
+        interaction_start = ctx.interaction.id.created_at.astimezone(datetime.timezone.utc)
+        
         if ctx.guild_id != settings.threads_guild:
             return
 
@@ -179,6 +181,17 @@ class Nickname:
                 "Well aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
             )
             return
+        
+        iat = db.execute(
+            "SELECT iat FROM ratelimits WHERE key=?",
+            (f"nickname/{ctx.member.id}",)
+        ).fetchone()
+        
+        if iat is not None:
+            last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
+            if (interaction_start - last_slapped) < datetime.timedelta(seconds=300):
+                await ctx.respond("calm down there", ephemeral=True)
+                return
 
         try:
             await bot.rest.edit_member(
@@ -204,6 +217,15 @@ class Nickname:
             f"<@{ctx.member.id}> set <@{self.who.id}>'s username to **{self.what.replace("*", r"\*").replace("`", r"\`")}**. Secretly.",
             user_mentions=[ctx.member.id, self.who.id]
         )
+        
+        db.execute(
+            "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
+            {
+                "key": f"nickname/{ctx.member.id}",
+                "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            }
+        )
+        db.commit()
 
 
 @commands.include
@@ -212,6 +234,46 @@ class Hello:
     async def callback(self, ctx: crescent.Context) -> None:
         await ctx.respond(
             "fuck off"
+        )
+
+
+@commands.include
+@crescent.command(name="debug_ratelimits", description="debug ratelimits")
+class Ratelimits:
+    async def callback(self, ctx: crescent.Context) -> None:
+        await ctx.respond(
+            "Timeout database: "
+            + "\n\n"
+            + "\n".join(f"- {key}: **{iat}**" for (key, iat) in db.execute(
+                "SELECT key, iat FROM ratelimits"
+            ).fetchall()),
+            ephemeral=True
+        )
+
+
+@commands.include
+@crescent.command(name="ratelimit", description="set a ratelimit key")
+class SetRatelimit:
+    key = crescent.option(str, "ratelimit key")
+    iat = crescent.option(str, "ratelimit value (iso format)")
+    async def callback(self, ctx: crescent.Context) -> None:
+        if ctx.user.id != settings.owner:
+            await ctx.respond(
+                "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
+            )
+            return
+        
+        db.execute(
+            "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
+            {
+                "key": self.key,
+                "iat": self.iat
+            }
+        )
+        
+        await ctx.respond(
+            "Okay.",
+            ephemeral=True
         )
 
 
@@ -234,19 +296,33 @@ async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
         await ctx.respond("who are you!?", ephemeral=True)
         return
     
+    ratelimit_key = f"slap/{ctx.member.id}"
+    ratelimit_timeout = 5
+    
     if thread[0] != ctx.channel_id:
-        await ctx.respond("not your thread bucko", ephemeral=True)
-        return
+        ratelimit_key = f"slap/global/{ctx.member.id}"
+        ratelimit_timeout = 86400
     
     iat = db.execute(
         "SELECT iat FROM ratelimits WHERE key=?",
-        (f"slap/{ctx.member.id}",)
+        (ratelimit_key,)
     ).fetchone()
     
     if iat is not None:
         last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
-        if (interaction_start - last_slapped) < datetime.timedelta(seconds=60):
+        if (interaction_start - last_slapped) < datetime.timedelta(seconds=ratelimit_timeout):
             await ctx.respond("hand hurty :(", ephemeral=True)
+            return
+    
+    iat = db.execute(
+        "SELECT iat FROM ratelimits WHERE key=?",
+        (f"slap/recipient/{message.author.id}",)
+    ).fetchone()
+    
+    if iat is not None:
+        last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
+        if (interaction_start - last_slapped) < datetime.timedelta(seconds=300):
+            await ctx.respond("oh my god they have suffered enough", ephemeral=True)
             return
     
     try:
@@ -273,6 +349,13 @@ async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
         "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
         {
             "key": f"slap/{ctx.member.id}",
+            "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+    )
+    db.execute(
+        "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
+        {
+            "key": f"slap/recipient/{message.author.id}",
             "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
     )
