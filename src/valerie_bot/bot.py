@@ -352,7 +352,7 @@ async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
     db.execute(
         "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
         {
-            "key": f"slap/{ctx.member.id}",
+            "key": ratelimit_key,
             "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
     )
