@@ -282,6 +282,10 @@ class SetRatelimit:
 async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
     assert ctx.member and ctx.guild
     
+    if message.author.is_bot:
+        await ctx.respond("you take a swing at the clanker and it breaks your hand", ephemeral=True)
+        return
+    
     interaction_start = ctx.interaction.id.created_at.astimezone(datetime.timezone.utc)
     
     if (interaction_start - message.created_at) > datetime.timedelta(seconds=30):
