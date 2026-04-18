@@ -81,8 +81,9 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
     view = ThreadCreateView(ev.thread_id, timeout=30)
     message = await bot.rest.create_message(
         ev.thread_id,
-        f"<@{ev.thread.owner_id}> Do you want to add everyone to this thread?\nIf you do not respond within 30 seconds, the default action is to add everyone.",
+        f"<@{ev.thread.owner_id}> **Do you want to add everyone to this thread?**\nIf you do not respond within 30 seconds, the default action is to add everyone.\nThis action will silently ping everyone.",
         components=view,
+        user_mentions=[ev.thread.owner_id]
     )
 
     views.start_view(view)
@@ -182,16 +183,19 @@ class Nickname:
             )
             return
         
-        iat = db.execute(
-            "SELECT iat FROM ratelimits WHERE key=?",
-            (f"nickname/{ctx.member.id}",)
-        ).fetchone()
+        is_self_rename = self.who.id == ctx.member.id
         
-        if iat is not None:
-            last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
-            if (interaction_start - last_slapped) < datetime.timedelta(seconds=300):
-                await ctx.respond("calm down there", ephemeral=True)
-                return
+        if not is_self_rename:
+            iat = db.execute(
+                "SELECT iat FROM ratelimits WHERE key=?",
+                (f"nickname/{ctx.member.id}",)
+            ).fetchone()
+            
+            if iat is not None:
+                last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
+                if (interaction_start - last_slapped) < datetime.timedelta(seconds=86400):
+                    await ctx.respond("calm down there", ephemeral=True)
+                    return
 
         try:
             await bot.rest.edit_member(
@@ -212,20 +216,26 @@ class Nickname:
                 ephemeral=True
             )
             return
-
-        await ctx.respond(
-            f"<@{ctx.member.id}> set <@{self.who.id}>'s username to **{self.what.replace("*", r"\*").replace("`", r"\`")}**. Secretly.",
-            user_mentions=[ctx.member.id, self.who.id]
-        )
         
-        db.execute(
-            "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
-            {
-                "key": f"nickname/{ctx.member.id}",
-                "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
-            }
-        )
-        db.commit()
+        if is_self_rename:
+            await ctx.respond(
+                "Okay.",
+                ephemeral=True
+            )
+        else:
+            await ctx.respond(
+                f"<@{ctx.member.id}> set <@{self.who.id}>'s username to **{self.what.replace("*", r"\*").replace("`", r"\`")}**. Secretly.",
+                user_mentions=[ctx.member.id, self.who.id]
+            )
+            
+            db.execute(
+                "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
+                {
+                    "key": f"nickname/{ctx.member.id}",
+                    "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                }
+            )
+            db.commit()
 
 
 @commands.include
