@@ -1,3 +1,5 @@
+import logging
+from hikari.api import ComponentBuilder, MessageActionRowBuilder
 import datetime
 import asyncio
 import crescent
@@ -14,6 +16,7 @@ bot = hikari.GatewayBot(
 )
 commands = crescent.Client(bot)
 views = miru.Client(bot)
+logger = logging.getLogger(__name__)
 
 
 async def create_user_thread(member: hikari.User):
@@ -103,15 +106,276 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
         )
 
 
-@bot.listen()
-async def join(ev: hikari.MemberCreateEvent):
-    if ev.guild_id != settings.threads_guild:
-        return
+@commands.include
+@crescent.command(
+    name="manual_create_onboarding", description="perform the onboarding flow"
+)
+class ManualCreateOnboarding():
+    async def callback(self, ctx: crescent.Context) -> None:
+        assert ctx.channel
+        
+        await ctx.app.rest.create_message(
+            ctx.channel.id,
+            "You pull up to the place Valerie told you about, and she's nowhere to be found.\n-# To access the server, **click the button.**",
+            component=ctx.app.rest.build_message_action_row()
+                .add_interactive_button(
+                    hikari.ButtonStyle.PRIMARY,
+                    "begin-onboarding",
+                    label="Text her"
+                )
+        )
 
-    if ev.member.is_bot:
-        return
 
-    await create_user_thread(ev.member)
+@bot.listen(hikari.InteractionCreateEvent)
+async def on_component_interaction(event: hikari.InteractionCreateEvent):
+    if not isinstance(event.interaction, hikari.ComponentInteraction):
+        return
+    
+    assert event.interaction.guild_id
+    
+    me = bot.get_me()
+    assert me
+    
+    def dialogue_environment(content: str, actions: MessageActionRowBuilder | None = None):
+        return hikari.impl.ContainerComponentBuilder(
+            components=[
+                hikari.impl.TextDisplayComponentBuilder(content=content),
+                *([actions] if actions is not None else [])
+            ]
+        )
+    
+    def dialogue_bot(content: str, actions: MessageActionRowBuilder | None = None):
+        return hikari.impl.ContainerComponentBuilder(
+            components=[
+                hikari.impl.SectionComponentBuilder(
+                    accessory=hikari.impl.ThumbnailComponentBuilder(
+                        media=me.make_avatar_url() or me.default_avatar_url
+                    ),
+                    components=[
+                        hikari.impl.TextDisplayComponentBuilder(content="-# **VALERIE**"),
+                        hikari.impl.TextDisplayComponentBuilder(content=content),
+                    ]
+                ),
+                *([actions] if actions is not None else [])
+            ]
+        )
+    
+    def dialogue_user(content: str, actions: MessageActionRowBuilder | None = None):
+        return hikari.impl.ContainerComponentBuilder(
+            components=[
+                hikari.impl.SectionComponentBuilder(
+                    accessory=hikari.impl.ThumbnailComponentBuilder(
+                        media=event.interaction.user.make_avatar_url() or me.default_avatar_url
+                    ),
+                    components=[
+                        hikari.impl.TextDisplayComponentBuilder(content="-# **YOU**"),
+                        hikari.impl.TextDisplayComponentBuilder(content=content),
+                    ]
+                ),
+                *([actions] if actions is not None else [])
+            ]
+        )
+    
+    interaction_id = event.interaction.custom_id
+    
+    logger.info(f"here \'{interaction_id}\'")
+    
+    def hallway_interact(village, threads, town_hall):
+        return hikari.impl.MessageActionRowBuilder(
+            components=[
+                hikari.impl.TextSelectMenuBuilder(
+                    custom_id=f"onboarding-select-2-{''.join(['y' if x else 'n' for x in [village, threads, town_hall]])}",
+                    options=[
+                        *([hikari.impl.SelectOptionBuilder(
+                            label="Village?",
+                            value="village",
+                            emoji="💬"
+                        )] if village else []),
+                        
+                        *([hikari.impl.SelectOptionBuilder(
+                            label="Threads?",
+                            value="threads",
+                            emoji="💬"
+                        )] if threads else []),
+                        
+                        *([hikari.impl.SelectOptionBuilder(
+                            label="Town hall?",
+                            value="town_hall",
+                            emoji="💬"
+                        )] if town_hall else []),
+                        
+                        hikari.impl.SelectOptionBuilder(
+                            label="Keep going",
+                            value="continue",
+                            description="Exit dialogue",
+                            emoji="⬅️",
+                        ),
+                    ]
+                )
+            ]
+        )
+    
+    if interaction_id == "begin-onboarding":
+        await event.interaction.create_initial_response(
+            hikari.ResponseType.MESSAGE_CREATE,
+            flags=hikari.MessageFlag.EPHEMERAL,
+            components=[
+                dialogue_user("> hey, where are you?\n> -# **Read** · 3m"),
+                dialogue_bot("> i'm coming give me a sec\n> -# Now"),
+                hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL),
+                dialogue_environment("Right on cue, she appears."),
+                hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL),
+                dialogue_bot(
+                    "> let's get going, shall we?",
+                    hikari.impl.MessageActionRowBuilder(
+                        components=[
+                            hikari.impl.TextSelectMenuBuilder(
+                                custom_id="onboarding-select",
+                                options=[
+                                    hikari.impl.SelectOptionBuilder(
+                                        label="Why should I trust you?",
+                                        value="trust",
+                                        emoji="💬"
+                                    ),
+                                    hikari.impl.SelectOptionBuilder(
+                                        label="Follow her",
+                                        value="continue",
+                                        description="Exit dialogue",
+                                        emoji="⬅️",
+                                    ),
+                                ]
+                            )
+                        ]
+                    )
+                )
+            ]
+        )
+    
+    elif interaction_id == "onboarding-select":
+        match event.interaction.values:
+            case ["trust"]:
+                await event.interaction.create_initial_response(
+                    hikari.ResponseType.MESSAGE_CREATE,
+                    flags=hikari.MessageFlag.EPHEMERAL,
+                    components=[
+                        dialogue_user("> why should I trust you"),
+                        dialogue_bot(
+                            "> bitch I don't know",
+                            hikari.impl.MessageActionRowBuilder(
+                                components=[
+                                    hikari.impl.TextSelectMenuBuilder(
+                                        custom_id="onboarding-select",
+                                        options=[
+                                            hikari.impl.SelectOptionBuilder(
+                                                label="Follow her",
+                                                value="continue",
+                                                description="Exit dialogue",
+                                                emoji="⬅️",
+                                            ),
+                                        ]
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                )
+            case ["continue"]:
+                await event.interaction.create_initial_response(
+                    hikari.ResponseType.MESSAGE_CREATE,
+                    flags=hikari.MessageFlag.EPHEMERAL,
+                    components=[
+                        dialogue_environment("She hurries you along the labyrinthine mess she's brought you to. Turn, after turn, after turn, seemingly never-ending..."),
+                        hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL),
+                        dialogue_bot(
+                            "> and so, like, the place is organised into threads, right? so everyone gets their own place to talk, and all...\n> it's kind of like a village. or a town. i mean, the communal space is called a _town_ hall but the whole thing is called a village. make it make sense?",
+                            hallway_interact(True, True, True)
+                        )
+                    ]
+                )
+        
+    elif interaction_id.startswith("onboarding-select-2-"):
+        (
+            village,
+            threads,
+            town_hall
+        ) = (x == "y" for x in interaction_id.replace("onboarding-select-2-", ""))
+        
+        logger.info(f"do response {village} {threads} {town_hall} {event.interaction.values}")
+        
+        match event.interaction.values:
+            case ["village"]:
+                await event.interaction.create_initial_response(
+                    hikari.ResponseType.MESSAGE_CREATE,
+                    flags=hikari.MessageFlag.EPHEMERAL,
+                    components=[
+                        dialogue_user("> village?"),
+                        dialogue_bot(
+                            "> yeah, i guess. everyone's together but in their own spaces. like a village?",
+                            hallway_interact(False, threads, town_hall)
+                        )
+                    ]
+                )
+            case ["threads"]:
+                await event.interaction.create_initial_response(
+                    hikari.ResponseType.MESSAGE_CREATE,
+                    flags=hikari.MessageFlag.EPHEMERAL,
+                    components=[
+                        dialogue_user("> threads?"),
+                        dialogue_bot(
+                            "> it's a little channel just for you. and other people get one too. you can also make one if you've got shared interests with other people! it's like a home.\n> and you should probably avoid being too weird in someone else's home, so, you know... be nice.",
+                            hallway_interact(village, False, town_hall)
+                        )
+                    ]
+                )
+            case ["town_hall"]:
+                await event.interaction.create_initial_response(
+                    hikari.ResponseType.MESSAGE_CREATE,
+                    flags=hikari.MessageFlag.EPHEMERAL,
+                    components=[
+                        dialogue_user("> town hall?"),
+                        dialogue_bot(
+                            "> it's a thread. it's for things you want to share with the class.",
+                            hallway_interact(village, threads, False)
+                        )
+                    ]
+                )
+            case ["continue"]:
+                await event.interaction.create_initial_response(
+                    hikari.ResponseType.MESSAGE_CREATE,
+                    flags=hikari.MessageFlag.EPHEMERAL,
+                    components=[
+                        dialogue_bot("> okay, we're here! just one last thing—i need you to sign this."),
+                                hikari.impl.SeparatorComponentBuilder(divider=True, spacing=hikari.SpacingType.LARGE,),
+                        hikari.impl.ContainerComponentBuilder(
+                            components=[
+                                hikari.impl.TextDisplayComponentBuilder(content="1. **I WILL ACT IN GOOD FAITH.**\n  I will be kind and thoughtful in how I communicate and avoid being destructive or inflammatory.\n\n2. **I WILL RESPECT THE COMMUNITY.**\n  I will not use the server's spaces for sexual activity. I will not send personal things to the town hall, or other people's threads, that are better suited to my own thread.\n\n3. **I WILL RESPECT OTHER PEOPLE'S SPACES.**\n  I will not derail other people's conversations, talk over the thread's owner or be unduly intimate, sexual or flirtatious in other people's spaces where it is not welcome, or in the town hall.\n\n4. **I WILL LEAVE A SPACE IF I DO NOT LIKE IT.**\n  I will use the \"Leave Thread\" button liberally if I do not like parts of the community.\n\n5. **I WILL CULTIVATE THE SPACE I WANT TO BE IN.**\n  I will tell people to stop talking in my thread if they're making me uncomfortable, or ask people to switch from a topic of conversation. "),
+                                hikari.impl.SeparatorComponentBuilder(divider=True, spacing=hikari.SpacingType.LARGE,),
+                                hikari.impl.TextDisplayComponentBuilder(content="I sign, in blood, this covenant and agree to abide by its terms."),
+                                hikari.impl.MessageActionRowBuilder(
+                                    components=[
+                                        hikari.impl.InteractiveButtonBuilder(
+                                            style=hikari.ButtonStyle.DANGER,
+                                            label="Sign the contract",
+                                            custom_id="onboarding-finish",
+                                        ),
+                                    ]
+                                ),
+                            ]
+                        ),
+                    ]
+                )
+
+    elif interaction_id == "onboarding-finish":
+        await event.interaction.create_initial_response(
+            response_type=hikari.ResponseType.DEFERRED_MESSAGE_CREATE,
+            flags=hikari.MessageFlag.EPHEMERAL
+        )
+        await bot.rest.add_role_to_member(
+            event.interaction.guild_id,
+            event.interaction.user,
+            settings.threads_role
+        )
+        await create_user_thread(event.interaction.user)
 
 
 @commands.include
@@ -409,7 +673,8 @@ GENAI_CONSENT_PROMPT = """
 - Your content is **not used to train Generative AI models or retained with third party inference providers.**
 
 Your messages may be processed when:
-
+    if not isinstance(event.interaction, hikari.ComponentInteraction):
+            return
 - Valerie is current looking at the same thread as you
 - You talk in Valerie's thread
 
