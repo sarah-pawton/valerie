@@ -345,7 +345,9 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                     flags=hikari.MessageFlag.EPHEMERAL,
                     components=[
                         dialogue_bot("> okay, we're here! just one last thing—i need you to sign this."),
-                                hikari.impl.SeparatorComponentBuilder(divider=True, spacing=hikari.SpacingType.LARGE,),
+                        hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL,),
+                        dialogue_environment("She hands you this and a blood lancet."),
+                        hikari.impl.SeparatorComponentBuilder(divider=True, spacing=hikari.SpacingType.LARGE,),
                         hikari.impl.ContainerComponentBuilder(
                             components=[
                                 hikari.impl.TextDisplayComponentBuilder(content="1. **I WILL ACT IN GOOD FAITH.**\n  I will be kind and thoughtful in how I communicate and avoid being destructive or inflammatory.\n\n2. **I WILL RESPECT THE COMMUNITY.**\n  I will not use the server's spaces for sexual activity. I will not send personal things to the town hall, or other people's threads, that are better suited to my own thread.\n\n3. **I WILL RESPECT OTHER PEOPLE'S SPACES.**\n  I will not derail other people's conversations, talk over the thread's owner or be unduly intimate, sexual or flirtatious in other people's spaces where it is not welcome, or in the town hall.\n\n4. **I WILL LEAVE A SPACE IF I DO NOT LIKE IT.**\n  I will use the \"Leave Thread\" button liberally if I do not like parts of the community.\n\n5. **I WILL CULTIVATE THE SPACE I WANT TO BE IN.**\n  I will tell people to stop talking in my thread if they're making me uncomfortable, or ask people to switch from a topic of conversation. "),
@@ -376,7 +378,7 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
             response_type=hikari.ResponseType.MESSAGE_CREATE,
             flags=hikari.MessageFlag.EPHEMERAL,
             components=[
-                dialogue_bot("you're in!")
+                dialogue_bot("> you're in!\n> oh—let me get you something for your finger...")
             ]
         )
 
