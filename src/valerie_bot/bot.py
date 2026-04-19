@@ -366,16 +366,19 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                 )
 
     elif interaction_id == "onboarding-finish":
-        await event.interaction.create_initial_response(
-            response_type=hikari.ResponseType.DEFERRED_MESSAGE_CREATE,
-            flags=hikari.MessageFlag.EPHEMERAL
-        )
         await bot.rest.add_role_to_member(
             event.interaction.guild_id,
             event.interaction.user,
             settings.threads_role
         )
         await create_user_thread(event.interaction.user)
+        await event.interaction.create_initial_response(
+            response_type=hikari.ResponseType.MESSAGE_CREATE,
+            flags=hikari.MessageFlag.EPHEMERAL,
+            components=[
+                dialogue_bot("you're in!")
+            ]
+        )
 
 
 @commands.include
