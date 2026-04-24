@@ -25,7 +25,7 @@ async def amain():
         
 
 def main():
-    db.execute("CREATE TABLE IF NOT EXISTS threads (user, thread);")
+    db.execute("CREATE TABLE IF NOT EXISTS threads (user, thread, is_primary);")
     db.execute("CREATE TABLE IF NOT EXISTS consents (user PRIMARY KEY, consent);")
     db.execute("CREATE TABLE IF NOT EXISTS ratelimits (key PRIMARY KEY, iat);")
     

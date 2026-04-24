@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 async def create_user_thread(member: hikari.User):
     if thread := db.execute(
-        "SELECT thread FROM threads WHERE user = ?", (int(member.id),)
+        "SELECT thread FROM threads WHERE user = ? AND is_primary = TRUE", (int(member.id),)
     ).fetchone():
         try:
             await bot.rest.create_message(thread[0], f"Welcome back, <@{member.id}>!")
@@ -46,26 +46,25 @@ async def create_user_thread(member: hikari.User):
         flags=hikari.MessageFlag.SUPPRESS_NOTIFICATIONS,
     )
 
-    db.execute("INSERT INTO threads VALUES (?, ?)", (int(member.id), int(thread.id)))
+    db.execute("INSERT INTO threads VALUES (?, ?, TRUE)", (int(member.id), int(thread.id)))
     db.commit()
 
 
 class ThreadCreateView(miru.View):
-    should_add_users: bool = True
+    is_personal: bool = False
     thread_id: hikari.Snowflake
 
     def __init__(self, thread_id: hikari.Snowflake, *args, **kwargs):
         self.thread_id = thread_id
         super().__init__(*args, **kwargs)
     
-    @miru.button(label="Yeah go on", style=hikari.ButtonStyle.PRIMARY)
-    async def delete_message(self, ctx: miru.ViewContext, button: miru.Button):
+    @miru.button(label="No, it's not personal", style=hikari.ButtonStyle.PRIMARY)
+    async def not_personal(self, ctx: miru.ViewContext, button: miru.Button):
         self.stop()
-
-    @miru.button(label="No fuck off", style=hikari.ButtonStyle.DANGER)
-    async def accept_button(self, ctx: miru.ViewContext, button: miru.Button):
-        await ctx.respond("Rude.", flags=hikari.MessageFlag.EPHEMERAL)
-        self.should_add_users = False
+    
+    @miru.button(label="Yes, it's personal", style=hikari.ButtonStyle.SECONDARY)
+    async def personal(self, ctx: miru.ViewContext, button: miru.Button):
+        self.is_personal = True
         self.stop()
 
 
@@ -84,7 +83,7 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
     view = ThreadCreateView(ev.thread_id, timeout=30)
     message = await bot.rest.create_message(
         ev.thread_id,
-        f"<@{ev.thread.owner_id}> **Do you want to add everyone to this thread?**\nIf you do not respond within 30 seconds, the default action is to add everyone.\nThis action will silently ping everyone.",
+        f"<@{ev.thread.owner_id}> **Is this thread a personal thread?**\nYou should select 'Yes' if the primary topic of this thread is you.",
         components=view,
         user_mentions=[ev.thread.owner_id]
     )
@@ -97,13 +96,43 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
     except hikari.NotFoundError:
         pass  # idc
 
-    if view.should_add_users:
-        await bot.rest.create_message(
-            ev.thread_id,
-            f"-# hey <@&{settings.threads_role}> <3",
-            role_mentions=[settings.threads_role],
-            flags=hikari.MessageFlag.SUPPRESS_NOTIFICATIONS,
-        )
+    if view.is_personal:
+        db.execute("INSERT INTO threads VALUES (?, ?, FALSE)", (int(ev.thread.owner_id), int(ev.thread.id),))
+        db.commit()
+
+
+@commands.include
+@crescent.command(
+    name="manual_thread_deassign", description="assign this thread to a user"
+)
+class ThreadAssign():
+    async def callback(self, ctx: crescent.Context) -> None:
+        if ctx.user.id != settings.owner:
+            await ctx.respond(
+                "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
+            )
+            return
+        
+        db.execute("DELETE FROM threads WHERE thread = ? AND is_primary = FALSE", (int(ctx.channel_id),))
+        db.commit()
+
+
+@commands.include
+@crescent.command(
+    name="manual_thread_assign", description="assign this thread to a user"
+)
+class Thread():
+    user = crescent.option(hikari.User, "user")
+    
+    async def callback(self, ctx: crescent.Context) -> None:
+        if ctx.user.id != settings.owner:
+            await ctx.respond(
+                "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
+            )
+            return
+        
+        db.execute("INSERT INTO threads VALUES (?, ?, FALSE)", (int(ctx.user.id), int(ctx.channel_id),))
+        db.commit()
 
 
 @commands.include
@@ -113,6 +142,12 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
 class ManualCreateOnboarding():
     async def callback(self, ctx: crescent.Context) -> None:
         assert ctx.channel
+        
+        if ctx.user.id != settings.owner:
+            await ctx.respond(
+                "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
+            )
+            return
         
         await ctx.app.rest.create_message(
             ctx.channel.id,
@@ -177,8 +212,6 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
         )
     
     interaction_id = event.interaction.custom_id
-    
-    logger.info(f"here \'{interaction_id}\'")
     
     def hallway_interact(village, threads, town_hall):
         return hikari.impl.MessageActionRowBuilder(
@@ -299,8 +332,6 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
             threads,
             town_hall
         ) = (x == "y" for x in interaction_id.replace("onboarding-select-2-", ""))
-        
-        logger.info(f"do response {village} {threads} {town_hall} {event.interaction.values}")
         
         match event.interaction.values:
             case ["village"]:
@@ -572,17 +603,13 @@ async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
         return
     
     thread = db.execute(
-        "SELECT thread FROM threads WHERE user = ?", (int(ctx.member.id),)
+        "SELECT thread FROM threads WHERE user = ? AND thread = ?", (int(ctx.member.id), int(ctx.channel_id))
     ).fetchone()
-    
-    if thread is None:
-        await ctx.respond("who are you!?", ephemeral=True)
-        return
     
     ratelimit_key = f"slap/{ctx.member.id}"
     ratelimit_timeout = 5
     
-    if thread[0] != ctx.channel_id:
+    if thread is None:
         ratelimit_key = f"slap/global/{ctx.member.id}"
         ratelimit_timeout = 86400
     
