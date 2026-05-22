@@ -633,7 +633,7 @@ class Nickname:
                     datetime.timezone.utc
                 )
                 if (interaction_start - last_slapped) < datetime.timedelta(
-                    seconds=86400
+                    seconds=3600
                 ):
                     await ctx.respond("calm down there", ephemeral=True)
                     return
@@ -746,7 +746,7 @@ async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
 
     if thread is None:
         ratelimit_key = f"slap/global/{ctx.member.id}"
-        ratelimit_timeout = 86400
+        ratelimit_timeout = 3600
 
     iat = db.execute(
         "SELECT iat FROM ratelimits WHERE key=?", (ratelimit_key,)
