@@ -1,10 +1,12 @@
-import logging
-from hikari.api import ComponentBuilder, MessageActionRowBuilder
-import datetime
 import asyncio
+import datetime
+import logging
+from typing import cast
+
 import crescent
 import hikari
 import miru
+from hikari.api import ComponentBuilder, MessageActionRowBuilder
 
 from valerie_bot.settings import db, settings
 
@@ -21,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 async def create_user_thread(member: hikari.User):
     if thread := db.execute(
-        "SELECT thread FROM threads WHERE user = ? AND is_primary = TRUE", (int(member.id),)
+        "SELECT thread FROM threads WHERE user = ? AND is_primary = TRUE",
+        (int(member.id),),
     ).fetchone():
         try:
             await bot.rest.create_message(thread[0], f"Welcome back, <@{member.id}>!")
@@ -46,7 +49,9 @@ async def create_user_thread(member: hikari.User):
         flags=hikari.MessageFlag.SUPPRESS_NOTIFICATIONS,
     )
 
-    db.execute("INSERT INTO threads VALUES (?, ?, TRUE)", (int(member.id), int(thread.id)))
+    db.execute(
+        "INSERT INTO threads VALUES (?, ?, TRUE)", (int(member.id), int(thread.id))
+    )
     db.commit()
 
 
@@ -57,11 +62,11 @@ class ThreadCreateView(miru.View):
     def __init__(self, thread_id: hikari.Snowflake, *args, **kwargs):
         self.thread_id = thread_id
         super().__init__(*args, **kwargs)
-    
+
     @miru.button(label="No, it's not personal", style=hikari.ButtonStyle.PRIMARY)
     async def not_personal(self, ctx: miru.ViewContext, button: miru.Button):
         self.stop()
-    
+
     @miru.button(label="Yes, it's personal", style=hikari.ButtonStyle.SECONDARY)
     async def personal(self, ctx: miru.ViewContext, button: miru.Button):
         self.is_personal = True
@@ -75,7 +80,7 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
 
     if ev.thread.owner_id == bot.get_me().id:
         return
-    
+
     # the bot can actually send a message before the first one
     # which is wild
     await asyncio.sleep(1)
@@ -85,7 +90,7 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
         ev.thread_id,
         f"<@{ev.thread.owner_id}> **Is this thread a personal thread?**\nYou should select 'Yes' if the primary topic of this thread is you.",
         components=view,
-        user_mentions=[ev.thread.owner_id]
+        user_mentions=[ev.thread.owner_id],
     )
 
     views.start_view(view)
@@ -97,7 +102,13 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
         pass  # idc
 
     if view.is_personal:
-        db.execute("INSERT INTO threads VALUES (?, ?, FALSE)", (int(ev.thread.owner_id), int(ev.thread.id),))
+        db.execute(
+            "INSERT INTO threads VALUES (?, ?, FALSE)",
+            (
+                int(ev.thread.owner_id),
+                int(ev.thread.id),
+            ),
+        )
         db.commit()
 
 
@@ -105,15 +116,18 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
 @crescent.command(
     name="manual_thread_deassign", description="assign this thread to a user"
 )
-class ThreadAssign():
+class ThreadAssign:
     async def callback(self, ctx: crescent.Context) -> None:
         if ctx.user.id != settings.owner:
             await ctx.respond(
                 "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
             )
             return
-        
-        db.execute("DELETE FROM threads WHERE thread = ? AND is_primary = FALSE", (int(ctx.channel_id),))
+
+        db.execute(
+            "DELETE FROM threads WHERE thread = ? AND is_primary = FALSE",
+            (int(ctx.channel_id),),
+        )
         db.commit()
 
 
@@ -121,43 +135,108 @@ class ThreadAssign():
 @crescent.command(
     name="manual_thread_assign", description="assign this thread to a user"
 )
-class Thread():
+class Thread:
     user = crescent.option(hikari.User, "user")
-    
+
     async def callback(self, ctx: crescent.Context) -> None:
         if ctx.user.id != settings.owner:
             await ctx.respond(
                 "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
             )
             return
-        
-        db.execute("INSERT INTO threads VALUES (?, ?, FALSE)", (int(ctx.user.id), int(ctx.channel_id),))
+
+        db.execute(
+            "INSERT INTO threads VALUES (?, ?, FALSE)",
+            (
+                int(ctx.user.id),
+                int(ctx.channel_id),
+            ),
+        )
         db.commit()
+
+
+class BulkDeleteView(miru.View):
+    is_confirmed: bool = False
+
+    @miru.button(label="Go ahead", style=hikari.ButtonStyle.DANGER)
+    async def confirm(self, ctx: miru.ViewContext, button: miru.Button):
+        self.is_confirmed = True
+        self.stop()
+
+    @miru.button(label="No, don't", style=hikari.ButtonStyle.SECONDARY)
+    async def deny(self, ctx: miru.ViewContext, button: miru.Button):
+        self.stop()
+
+
+@commands.include
+@crescent.command(name="bulk_delete")
+class BulkDelete:
+    delete_from = crescent.option(str, "from")
+    delete_to = crescent.option(str, "to")
+
+    async def callback(self, ctx: crescent.Context) -> None:
+        assert ctx.channel
+
+        if ctx.user.id != settings.owner:
+            await ctx.respond(
+                "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
+            )
+            return
+
+        message_candidates = cast(
+            list[hikari.Message],
+            await ctx.app.rest.fetch_messages(
+                ctx.channel_id,
+                after=hikari.Snowflake(self.delete_from).created_at
+                - datetime.timedelta(minutes=2),
+            )
+            .skip_until(lambda m: int(m.id) == int(self.delete_from))
+            .take_until(lambda m: int(m.id) == int(self.delete_to))
+            .collect(list),
+        )
+
+        view = BulkDeleteView(timeout=30)
+        await ctx.respond(
+            f"This action will delete **{len(message_candidates)}** messages.",
+            components=view,
+            ephemeral=True,
+        )
+
+        views.start_view(view)
+        await view.wait()
+
+        if view.is_confirmed:
+            await ctx.app.rest.delete_messages(
+                ctx.channel_id,
+                message_candidates,
+                reason="by request",
+            )
+            await ctx.respond(
+                content=f"Deleted **{len(message_candidates)}** messages.",
+                components=[]
+            )
 
 
 @commands.include
 @crescent.command(
     name="manual_create_onboarding", description="perform the onboarding flow"
 )
-class ManualCreateOnboarding():
+class ManualCreateOnboarding:
     async def callback(self, ctx: crescent.Context) -> None:
         assert ctx.channel
-        
+
         if ctx.user.id != settings.owner:
             await ctx.respond(
                 "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
             )
             return
-        
+
         await ctx.app.rest.create_message(
             ctx.channel.id,
             "You pull up to the place Valerie told you about, and she's nowhere to be found.\n-# To access the server, **click the button.**",
-            component=ctx.app.rest.build_message_action_row()
-                .add_interactive_button(
-                    hikari.ButtonStyle.PRIMARY,
-                    "begin-onboarding",
-                    label="Text her"
-                )
+            component=ctx.app.rest.build_message_action_row().add_interactive_button(
+                hikari.ButtonStyle.PRIMARY, "begin-onboarding", label="Text her"
+            ),
         )
 
 
@@ -165,20 +244,22 @@ class ManualCreateOnboarding():
 async def on_component_interaction(event: hikari.InteractionCreateEvent):
     if not isinstance(event.interaction, hikari.ComponentInteraction):
         return
-    
+
     assert event.interaction.guild_id
-    
+
     me = bot.get_me()
     assert me
-    
-    def dialogue_environment(content: str, actions: MessageActionRowBuilder | None = None):
+
+    def dialogue_environment(
+        content: str, actions: MessageActionRowBuilder | None = None
+    ):
         return hikari.impl.ContainerComponentBuilder(
             components=[
                 hikari.impl.TextDisplayComponentBuilder(content=content),
-                *([actions] if actions is not None else [])
+                *([actions] if actions is not None else []),
             ]
         )
-    
+
     def dialogue_bot(content: str, actions: MessageActionRowBuilder | None = None):
         return hikari.impl.ContainerComponentBuilder(
             components=[
@@ -187,67 +268,79 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                         media=me.make_avatar_url() or me.default_avatar_url
                     ),
                     components=[
-                        hikari.impl.TextDisplayComponentBuilder(content="-# **VALERIE**"),
+                        hikari.impl.TextDisplayComponentBuilder(
+                            content="-# **VALERIE**"
+                        ),
                         hikari.impl.TextDisplayComponentBuilder(content=content),
-                    ]
+                    ],
                 ),
-                *([actions] if actions is not None else [])
+                *([actions] if actions is not None else []),
             ]
         )
-    
+
     def dialogue_user(content: str, actions: MessageActionRowBuilder | None = None):
         return hikari.impl.ContainerComponentBuilder(
             components=[
                 hikari.impl.SectionComponentBuilder(
                     accessory=hikari.impl.ThumbnailComponentBuilder(
-                        media=event.interaction.user.make_avatar_url() or me.default_avatar_url
+                        media=event.interaction.user.make_avatar_url()
+                        or me.default_avatar_url
                     ),
                     components=[
                         hikari.impl.TextDisplayComponentBuilder(content="-# **YOU**"),
                         hikari.impl.TextDisplayComponentBuilder(content=content),
-                    ]
+                    ],
                 ),
-                *([actions] if actions is not None else [])
+                *([actions] if actions is not None else []),
             ]
         )
-    
+
     interaction_id = event.interaction.custom_id
-    
+
     def hallway_interact(village, threads, town_hall):
         return hikari.impl.MessageActionRowBuilder(
             components=[
                 hikari.impl.TextSelectMenuBuilder(
                     custom_id=f"onboarding-select-2-{''.join(['y' if x else 'n' for x in [village, threads, town_hall]])}",
                     options=[
-                        *([hikari.impl.SelectOptionBuilder(
-                            label="Village?",
-                            value="village",
-                            emoji="💬"
-                        )] if village else []),
-                        
-                        *([hikari.impl.SelectOptionBuilder(
-                            label="Threads?",
-                            value="threads",
-                            emoji="💬"
-                        )] if threads else []),
-                        
-                        *([hikari.impl.SelectOptionBuilder(
-                            label="Town hall?",
-                            value="town_hall",
-                            emoji="💬"
-                        )] if town_hall else []),
-                        
+                        *(
+                            [
+                                hikari.impl.SelectOptionBuilder(
+                                    label="Village?", value="village", emoji="💬"
+                                )
+                            ]
+                            if village
+                            else []
+                        ),
+                        *(
+                            [
+                                hikari.impl.SelectOptionBuilder(
+                                    label="Threads?", value="threads", emoji="💬"
+                                )
+                            ]
+                            if threads
+                            else []
+                        ),
+                        *(
+                            [
+                                hikari.impl.SelectOptionBuilder(
+                                    label="Town hall?", value="town_hall", emoji="💬"
+                                )
+                            ]
+                            if town_hall
+                            else []
+                        ),
                         hikari.impl.SelectOptionBuilder(
                             label="Keep going",
                             value="continue",
                             description="Exit dialogue",
                             emoji="⬅️",
                         ),
-                    ]
+                    ],
                 )
             ]
         )
-    
+
     if interaction_id == "begin-onboarding":
         await event.interaction.create_initial_response(
             hikari.ResponseType.MESSAGE_CREATE,
@@ -255,9 +348,13 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
             components=[
                 dialogue_user("> hey, where are you?\n> -# **Read** · 3m"),
                 dialogue_bot("> i'm coming give me a sec\n> -# Now"),
-                hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL),
+                hikari.impl.SeparatorComponentBuilder(
+                    divider=False, spacing=hikari.SpacingType.SMALL
+                ),
                 dialogue_environment("Right on cue, she appears."),
-                hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL),
+                hikari.impl.SeparatorComponentBuilder(
+                    divider=False, spacing=hikari.SpacingType.SMALL
+                ),
                 dialogue_bot(
                     "> let's get going, shall we?",
                     hikari.impl.MessageActionRowBuilder(
@@ -268,7 +365,7 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                                     hikari.impl.SelectOptionBuilder(
                                         label="Why should I trust you?",
                                         value="trust",
-                                        emoji="💬"
+                                        emoji="💬",
                                     ),
                                     hikari.impl.SelectOptionBuilder(
                                         label="Follow her",
@@ -276,14 +373,14 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                                         description="Exit dialogue",
                                         emoji="⬅️",
                                     ),
-                                ]
+                                ],
                             )
                         ]
-                    )
-                )
-            ]
+                    ),
+                ),
+            ],
         )
-    
+
     elif interaction_id == "onboarding-select":
         match event.interaction.values:
             case ["trust"]:
@@ -305,34 +402,36 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                                                 description="Exit dialogue",
                                                 emoji="⬅️",
                                             ),
-                                        ]
+                                        ],
                                     )
                                 ]
-                            )
-                        )
-                    ]
+                            ),
+                        ),
+                    ],
                 )
             case ["continue"]:
                 await event.interaction.create_initial_response(
                     hikari.ResponseType.MESSAGE_CREATE,
                     flags=hikari.MessageFlag.EPHEMERAL,
                     components=[
-                        dialogue_environment("She hurries you along the labyrinthine mess she's brought you to. Turn, after turn, after turn, seemingly never-ending..."),
-                        hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL),
+                        dialogue_environment(
+                            "She hurries you along the labyrinthine mess she's brought you to. Turn, after turn, after turn, seemingly never-ending..."
+                        ),
+                        hikari.impl.SeparatorComponentBuilder(
+                            divider=False, spacing=hikari.SpacingType.SMALL
+                        ),
                         dialogue_bot(
                             "> and so, like, the place is organised into threads, right? so everyone gets their own place to talk, and all...\n> it's kind of like a village. or a town. i mean, the communal space is called a _town_ hall but the whole thing is called a village. make it make sense?",
-                            hallway_interact(True, True, True)
-                        )
-                    ]
+                            hallway_interact(True, True, True),
+                        ),
+                    ],
                 )
-        
+
     elif interaction_id.startswith("onboarding-select-2-"):
-        (
-            village,
-            threads,
-            town_hall
-        ) = (x == "y" for x in interaction_id.replace("onboarding-select-2-", ""))
-        
+        (village, threads, town_hall) = (
+            x == "y" for x in interaction_id.replace("onboarding-select-2-", "")
+        )
+
         match event.interaction.values:
             case ["village"]:
                 await event.interaction.create_initial_response(
@@ -342,9 +441,9 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                         dialogue_user("> village?"),
                         dialogue_bot(
                             "> yeah, i guess. everyone's together but in their own spaces. like a village?",
-                            hallway_interact(False, threads, town_hall)
-                        )
-                    ]
+                            hallway_interact(False, threads, town_hall),
+                        ),
+                    ],
                 )
             case ["threads"]:
                 await event.interaction.create_initial_response(
@@ -354,9 +453,9 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                         dialogue_user("> threads?"),
                         dialogue_bot(
                             "> it's a little channel just for you. and other people get one too. you can also make one if you've got shared interests with other people! it's like a home.\n> and you should probably avoid being too weird in someone else's home, so, you know... be nice.",
-                            hallway_interact(village, False, town_hall)
-                        )
-                    ]
+                            hallway_interact(village, False, town_hall),
+                        ),
+                    ],
                 )
             case ["town_hall"]:
                 await event.interaction.create_initial_response(
@@ -366,24 +465,39 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                         dialogue_user("> town hall?"),
                         dialogue_bot(
                             "> it's a thread. it's for things you want to share with the class.",
-                            hallway_interact(village, threads, False)
-                        )
-                    ]
+                            hallway_interact(village, threads, False),
+                        ),
+                    ],
                 )
             case ["continue"]:
                 await event.interaction.create_initial_response(
                     hikari.ResponseType.MESSAGE_CREATE,
                     flags=hikari.MessageFlag.EPHEMERAL,
                     components=[
-                        dialogue_bot("> okay, we're here! just one last thing—i need you to sign this."),
-                        hikari.impl.SeparatorComponentBuilder(divider=False, spacing=hikari.SpacingType.SMALL,),
+                        dialogue_bot(
+                            "> okay, we're here! just one last thing—i need you to sign this."
+                        ),
+                        hikari.impl.SeparatorComponentBuilder(
+                            divider=False,
+                            spacing=hikari.SpacingType.SMALL,
+                        ),
                         dialogue_environment("She hands you this and a blood lancet."),
-                        hikari.impl.SeparatorComponentBuilder(divider=True, spacing=hikari.SpacingType.LARGE,),
+                        hikari.impl.SeparatorComponentBuilder(
+                            divider=True,
+                            spacing=hikari.SpacingType.LARGE,
+                        ),
                         hikari.impl.ContainerComponentBuilder(
                             components=[
-                                hikari.impl.TextDisplayComponentBuilder(content="1. **I WILL ACT IN GOOD FAITH.**\n  I will be kind and thoughtful in how I communicate and avoid being destructive or inflammatory.\n\n2. **I WILL RESPECT THE COMMUNITY.**\n  I will not use the server's spaces for sexual activity. I will not send personal things to the town hall, or other people's threads, that are better suited to my own thread.\n\n3. **I WILL RESPECT OTHER PEOPLE'S SPACES.**\n  I will not derail other people's conversations, talk over the thread's owner or be unduly intimate, sexual or flirtatious in other people's spaces where it is not welcome, or in the town hall.\n\n4. **I WILL LEAVE A SPACE IF I DO NOT LIKE IT.**\n  I will use the \"Leave Thread\" button liberally if I do not like parts of the community.\n\n5. **I WILL CULTIVATE THE SPACE I WANT TO BE IN.**\n  I will tell people to stop talking in my thread if they're making me uncomfortable, or ask people to switch from a topic of conversation. "),
-                                hikari.impl.SeparatorComponentBuilder(divider=True, spacing=hikari.SpacingType.LARGE,),
-                                hikari.impl.TextDisplayComponentBuilder(content="I sign, in blood, this covenant and agree to abide by its terms."),
+                                hikari.impl.TextDisplayComponentBuilder(
+                                    content="1. **I WILL ACT IN GOOD FAITH.**\n  I will be kind and thoughtful in how I communicate and avoid being destructive or inflammatory.\n\n2. **I WILL RESPECT THE COMMUNITY.**\n  I will not use the server's spaces for sexual activity. I will not send personal things to the town hall, or other people's threads, that are better suited to my own thread.\n\n3. **I WILL RESPECT OTHER PEOPLE'S SPACES.**\n  I will not derail other people's conversations, talk over the thread's owner or be unduly intimate, sexual or flirtatious in other people's spaces where it is not welcome, or in the town hall.\n\n4. **I WILL LEAVE A SPACE IF I DO NOT LIKE IT.**\n  I will use the \"Leave Thread\" button liberally if I do not like parts of the community.\n\n5. **I WILL CULTIVATE THE SPACE I WANT TO BE IN.**\n  I will tell people to stop talking in my thread if they're making me uncomfortable, or ask people to switch from a topic of conversation. "
+                                ),
+                                hikari.impl.SeparatorComponentBuilder(
+                                    divider=True,
+                                    spacing=hikari.SpacingType.LARGE,
+                                ),
+                                hikari.impl.TextDisplayComponentBuilder(
+                                    content="I sign, in blood, this covenant and agree to abide by its terms."
+                                ),
                                 hikari.impl.MessageActionRowBuilder(
                                     components=[
                                         hikari.impl.InteractiveButtonBuilder(
@@ -395,22 +509,22 @@ async def on_component_interaction(event: hikari.InteractionCreateEvent):
                                 ),
                             ]
                         ),
-                    ]
+                    ],
                 )
 
     elif interaction_id == "onboarding-finish":
         await bot.rest.add_role_to_member(
-            event.interaction.guild_id,
-            event.interaction.user,
-            settings.threads_role
+            event.interaction.guild_id, event.interaction.user, settings.threads_role
         )
         await create_user_thread(event.interaction.user)
         await event.interaction.create_initial_response(
             response_type=hikari.ResponseType.MESSAGE_CREATE,
             flags=hikari.MessageFlag.EPHEMERAL,
             components=[
-                dialogue_bot("> you're in!\n> oh—let me get you something for your finger...")
-            ]
+                dialogue_bot(
+                    "> you're in!\n> oh—let me get you something for your finger..."
+                )
+            ],
         )
 
 
@@ -433,6 +547,25 @@ class ManualCreateThread:
 
         await ctx.respond("Okay.", flags=hikari.MessageFlag.EPHEMERAL)
         await create_user_thread(self.user)
+
+
+@commands.include
+@crescent.command(name="leave", description="take a break")
+class Leave:
+    async def callback(self, ctx: crescent.Context) -> None:
+        if ctx.guild_id != settings.threads_guild:
+            return
+
+        assert ctx.member and ctx.guild_id
+
+        await bot.rest.remove_role_from_member(
+            ctx.guild_id,
+            ctx.member,
+            settings.threads_role,
+            reason="by request (/leave)"
+        )
+
+        await ctx.respond("bye", ephemeral=True)
 
 
 @commands.include
@@ -464,16 +597,21 @@ class Rename:
 
 
 @commands.include
-@crescent.command(name="nickname", description="set a private nickname for someone that nobody but you will see")
+@crescent.command(
+    name="nickname",
+    description="set a private nickname for someone that nobody but you will see",
+)
 class Nickname:
     who = crescent.option(hikari.User, "who")
     what = crescent.option(str, "what's your funny name, huh?")
 
     async def callback(self, ctx: crescent.Context) -> None:
         assert ctx.member and ctx.channel and ctx.guild
-        
-        interaction_start = ctx.interaction.id.created_at.astimezone(datetime.timezone.utc)
-        
+
+        interaction_start = ctx.interaction.id.created_at.astimezone(
+            datetime.timezone.utc
+        )
+
         if ctx.guild_id != settings.threads_guild:
             return
 
@@ -482,18 +620,21 @@ class Nickname:
                 "Well aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
             )
             return
-        
+
         is_self_rename = self.who.id == ctx.member.id
-        
+
         if not is_self_rename:
             iat = db.execute(
-                "SELECT iat FROM ratelimits WHERE key=?",
-                (f"nickname/{ctx.member.id}",)
+                "SELECT iat FROM ratelimits WHERE key=?", (f"nickname/{ctx.member.id}",)
             ).fetchone()
-            
+
             if iat is not None:
-                last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
-                if (interaction_start - last_slapped) < datetime.timedelta(seconds=86400):
+                last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(
+                    datetime.timezone.utc
+                )
+                if (interaction_start - last_slapped) < datetime.timedelta(
+                    seconds=86400
+                ):
                     await ctx.respond("calm down there", ephemeral=True)
                     return
 
@@ -502,38 +643,31 @@ class Nickname:
                 ctx.guild,
                 self.who,
                 nickname=self.what,
-                reason=f"by request from {ctx.member.username} ({ctx.member.id})"
+                reason=f"by request from {ctx.member.username} ({ctx.member.id})",
             )
         except hikari.RateLimitTooLongError as e:
             await ctx.respond(
-                f"Go away I'll do it <t:{int(e.reset_at)}:R>",
-                ephemeral=True
+                f"Go away I'll do it <t:{int(e.reset_at)}:R>", ephemeral=True
             )
             return
         except hikari.ForbiddenError as e:
-            await ctx.respond(
-                f"I couldn't do that\n-# detail: `{e}`",
-                ephemeral=True
-            )
+            await ctx.respond(f"I couldn't do that\n-# detail: `{e}`", ephemeral=True)
             return
-        
+
         if is_self_rename:
-            await ctx.respond(
-                "Okay.",
-                ephemeral=True
-            )
+            await ctx.respond("Okay.", ephemeral=True)
         else:
             await ctx.respond(
-                f"<@{ctx.member.id}> set <@{self.who.id}>'s username to **{self.what.replace("*", r"\*").replace("`", r"\`")}**. Secretly.",
-                user_mentions=[ctx.member.id, self.who.id]
+                f"<@{ctx.member.id}> set <@{self.who.id}>'s username to **{self.what.replace('*', r'\*').replace('`', r'\`')}**. Secretly.",
+                user_mentions=[ctx.member.id, self.who.id],
             )
-            
+
             db.execute(
                 "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
                 {
                     "key": f"nickname/{ctx.member.id}",
-                    "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                }
+                    "iat": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                },
             )
             db.commit()
 
@@ -542,9 +676,7 @@ class Nickname:
 @crescent.command(name="hey", description="fuck off")
 class Hello:
     async def callback(self, ctx: crescent.Context) -> None:
-        await ctx.respond(
-            "fuck off"
-        )
+        await ctx.respond("fuck off")
 
 
 @commands.include
@@ -554,10 +686,13 @@ class Ratelimits:
         await ctx.respond(
             "Timeout database: "
             + "\n\n"
-            + "\n".join(f"- {key}: **{iat}**" for (key, iat) in db.execute(
-                "SELECT key, iat FROM ratelimits"
-            ).fetchall()),
-            ephemeral=True
+            + "\n".join(
+                f"- {key}: **{iat}**"
+                for (key, iat) in db.execute(
+                    "SELECT key, iat FROM ratelimits"
+                ).fetchall()
+            ),
+            ephemeral=True,
         )
 
 
@@ -566,114 +701,114 @@ class Ratelimits:
 class SetRatelimit:
     key = crescent.option(str, "ratelimit key")
     iat = crescent.option(str, "ratelimit value (iso format)")
+
     async def callback(self, ctx: crescent.Context) -> None:
         if ctx.user.id != settings.owner:
             await ctx.respond(
                 "Well, aren't you clever?", flags=hikari.MessageFlag.EPHEMERAL
             )
             return
-        
+
         db.execute(
             "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
-            {
-                "key": self.key,
-                "iat": self.iat
-            }
+            {"key": self.key, "iat": self.iat},
         )
-        
-        await ctx.respond(
-            "Okay.",
-            ephemeral=True
-        )
+
+        await ctx.respond("Okay.", ephemeral=True)
 
 
 @commands.include
 @crescent.message_command(name="slap")
 async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
     assert ctx.member and ctx.guild
-    
+
     if message.author.is_bot:
-        await ctx.respond("you take a swing at the clanker and it breaks your hand", ephemeral=True)
+        await ctx.respond(
+            "you take a swing at the clanker and it breaks your hand", ephemeral=True
+        )
         return
-    
+
     interaction_start = ctx.interaction.id.created_at.astimezone(datetime.timezone.utc)
-    
+
     if (interaction_start - message.created_at) > datetime.timedelta(seconds=30):
-        await ctx.respond("you've got to do that within 30 seconds buddy", ephemeral=True)
+        await ctx.respond(
+            "you've got to do that within 30 seconds buddy", ephemeral=True
+        )
         return
-    
+
     thread = db.execute(
-        "SELECT thread FROM threads WHERE user = ? AND thread = ?", (int(ctx.member.id), int(ctx.channel_id))
+        "SELECT thread FROM threads WHERE user = ? AND thread = ?",
+        (int(ctx.member.id), int(ctx.channel_id)),
     ).fetchone()
-    
+
     ratelimit_key = f"slap/{ctx.member.id}"
     ratelimit_timeout = 5
-    
+
     if thread is None:
         ratelimit_key = f"slap/global/{ctx.member.id}"
         ratelimit_timeout = 86400
-    
+
     iat = db.execute(
-        "SELECT iat FROM ratelimits WHERE key=?",
-        (ratelimit_key,)
+        "SELECT iat FROM ratelimits WHERE key=?", (ratelimit_key,)
     ).fetchone()
-    
+
     if iat is not None:
-        last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
-        if (interaction_start - last_slapped) < datetime.timedelta(seconds=ratelimit_timeout):
+        last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(
+            datetime.timezone.utc
+        )
+        if (interaction_start - last_slapped) < datetime.timedelta(
+            seconds=ratelimit_timeout
+        ):
             await ctx.respond("hand hurty :(", ephemeral=True)
             return
-    
+
     iat = db.execute(
         "SELECT iat FROM ratelimits WHERE key=?",
-        (f"slap/recipient/{message.author.id}",)
+        (f"slap/recipient/{message.author.id}",),
     ).fetchone()
-    
+
     if iat is not None:
-        last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(datetime.timezone.utc)
+        last_slapped = datetime.datetime.fromisoformat(iat[0]).astimezone(
+            datetime.timezone.utc
+        )
         if (interaction_start - last_slapped) < datetime.timedelta(seconds=300):
             await ctx.respond("oh my god they have suffered enough", ephemeral=True)
             return
-    
+
     try:
         await bot.rest.edit_member(
             ctx.guild,
             message.author,
-            communication_disabled_until=interaction_start + datetime.timedelta(seconds=7),
-            reason=f"by request from {ctx.member.username} ({ctx.member.id})"
+            communication_disabled_until=interaction_start
+            + datetime.timedelta(seconds=7),
+            reason=f"by request from {ctx.member.username} ({ctx.member.id})",
         )
     except hikari.RateLimitTooLongError as e:
-        await ctx.respond(
-            f"Go away I'll do it <t:{int(e.reset_at)}:R>",
-            ephemeral=True
-        )
+        await ctx.respond(f"Go away I'll do it <t:{int(e.reset_at)}:R>", ephemeral=True)
         return
     except hikari.ForbiddenError as e:
-        await ctx.respond(
-            f"I couldn't do that\n-# detail: `{e}`",
-            ephemeral=True
-        )
+        await ctx.respond(f"I couldn't do that\n-# detail: `{e}`", ephemeral=True)
         return
-    
+
     db.execute(
         "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
         {
             "key": ratelimit_key,
-            "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
-        }
+            "iat": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        },
     )
     db.execute(
         "INSERT INTO ratelimits VALUES (:key, :iat) ON CONFLICT(key) DO UPDATE SET iat=:iat",
         {
             "key": f"slap/recipient/{message.author.id}",
-            "iat": datetime.datetime.now(datetime.timezone.utc).isoformat()
-        }
+            "iat": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        },
     )
     db.commit()
-    
+
     await ctx.respond(
         f"<@{message.author.id}> got slapped for that message",
-        user_mentions=[message.author.id]
+        user_mentions=[message.author.id],
     )
 
 
@@ -718,7 +853,7 @@ GENAI_REVOKE_CONSENT_PROMPT = """
 You have already consented. You may **withdraw your consent.**
 
 In this case:
-    
+
 - Your data will be deleted as soon as possible, and within one calendar month.
 """
 
@@ -730,9 +865,11 @@ class GenaiConsent:
         if not settings.enable_genai:
             await ctx.respond("This feature isn't available right now", ephemeral=True)
             return
-        
+
         consent_view = GenaiConsentView(timeout=120)
-        consent = db.execute("SELECT consent FROM consents WHERE user=?", (ctx.user.id,)).fetchone()
+        consent = db.execute(
+            "SELECT consent FROM consents WHERE user=?", (ctx.user.id,)
+        ).fetchone()
 
         await ctx.respond(
             content=GENAI_CONSENT_PROMPT.replace(
@@ -740,21 +877,23 @@ class GenaiConsent:
                 {
                     None: "not stated a preference",
                     (0,): "declined to consent",
-                    (1,): "consented"
-                }[consent]
-            ), ephemeral=True, components=consent_view
+                    (1,): "consented",
+                }[consent],
+            ),
+            ephemeral=True,
+            components=consent_view,
         )
 
         views.start_view(consent_view)
         await consent_view.wait()
-        
+
         if consent_view.did_interact:
             db.execute(
                 "INSERT INTO consents VALUES (:user, :consent) ON CONFLICT(user) DO UPDATE SET consent=:consent",
                 {"user": ctx.user.id, "consent": consent_view.did_consent},
             )
             db.commit()
-            
+
             if consent_view.did_consent:
                 await ctx.edit("Your preference has been saved", components=[])
         else:
