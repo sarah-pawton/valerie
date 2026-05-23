@@ -81,6 +81,9 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
     if ev.thread.owner_id == bot.get_me().id:
         return
 
+    if ev.thread.type & hikari.ChannelType.GUILD_PRIVATE_THREAD:
+        return
+
     # the bot can actually send a message before the first one
     # which is wild
     await asyncio.sleep(1)
@@ -213,7 +216,7 @@ class BulkDelete:
             )
             await ctx.respond(
                 content=f"Deleted **{len(message_candidates)}** messages.",
-                components=[]
+                components=[],
             )
 
 
@@ -562,7 +565,7 @@ class Leave:
             ctx.guild_id,
             ctx.member,
             settings.threads_role,
-            reason="by request (/leave)"
+            reason="by request (/leave)",
         )
 
         await ctx.respond("bye", ephemeral=True)
@@ -810,6 +813,41 @@ async def slap(ctx: crescent.Context, message: hikari.Message) -> None:
         f"<@{message.author.id}> got slapped for that message",
         user_mentions=[message.author.id],
     )
+
+
+@commands.include
+@crescent.command(
+    name="private_thread",
+    description="Make a private thread. It will be deleted after an hour.",
+)
+class PrivateThread:
+    name = crescent.option(str, "thread name?")
+
+    async def callback(self, ctx: crescent.Context) -> None:
+        assert ctx.guild_id == settings.threads_guild
+        assert ctx.member
+
+        thread = await bot.rest.create_thread(
+            settings.threads_channel,
+            hikari.ChannelType.GUILD_PRIVATE_THREAD,
+            self.name,
+            reason=f"by request from {ctx.member.username} ({ctx.member.id})",
+            invitable=True,
+        )
+
+        await ctx.respond(
+            f"Created a thread **{self.name}**. You can add people to it by pinging them inside it. It will be deleted in an hour."
+        )
+
+        await thread.send(f"Hey, <@{ctx.member.id}>!", user_mentions=True)
+
+        await asyncio.sleep(3600 - 300)
+
+        await thread.send("This thread will be deleted in 5 minutes.")
+
+        await asyncio.sleep(300)
+
+        await thread.delete()
 
 
 class GenaiConsentView(miru.View):
