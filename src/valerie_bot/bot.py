@@ -836,7 +836,8 @@ class PrivateThread:
         )
 
         await ctx.respond(
-            f"Created a thread **{self.name}**. You can add people to it by pinging them inside it. It will be deleted in an hour."
+            f"Created a thread **{self.name}**. You can add people to it by pinging them inside it. It will be deleted in an hour.",
+            ephemeral=True
         )
 
         await thread.send(f"Hey, <@{ctx.member.id}>!", user_mentions=True)
