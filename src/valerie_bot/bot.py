@@ -827,13 +827,20 @@ class PrivateThread:
         assert ctx.guild_id == settings.threads_guild
         assert ctx.member
 
-        thread = await bot.rest.create_thread(
-            settings.threads_channel,
-            hikari.ChannelType.GUILD_PRIVATE_THREAD,
-            self.name,
-            reason=f"by request from {ctx.member.username} ({ctx.member.id})",
-            invitable=True,
-        )
+        try:
+            thread = await bot.rest.create_thread(
+                settings.threads_channel,
+                hikari.ChannelType.GUILD_PRIVATE_THREAD,
+                f"🔒 {self.name}",
+                reason=f"by request from {ctx.member.username} ({ctx.member.id})",
+                invitable=True,
+            )
+        except hikari.BadRequestError as e:
+            await ctx.respond(
+                f"That thread name was invalid: {e}",
+                ephemeral=True
+            )
+            return
 
         await ctx.respond(
             f"Created a thread **{self.name}**. You can add people to it by pinging them inside it. It will be deleted in an hour.",
