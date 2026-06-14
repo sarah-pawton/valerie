@@ -119,7 +119,7 @@ async def thread(ev: hikari.GuildThreadCreateEvent):
 @crescent.command(
     name="manual_thread_deassign", description="assign this thread to a user"
 )
-class ThreadAssign:
+class ThreadDeassign:
     async def callback(self, ctx: crescent.Context) -> None:
         if ctx.user.id != settings.owner:
             await ctx.respond(
@@ -138,7 +138,7 @@ class ThreadAssign:
 @crescent.command(
     name="manual_thread_assign", description="assign this thread to a user"
 )
-class Thread:
+class ThreadAssign:
     user = crescent.option(hikari.User, "user")
 
     async def callback(self, ctx: crescent.Context) -> None:
@@ -169,6 +169,22 @@ class BulkDeleteView(miru.View):
     @miru.button(label="No, don't", style=hikari.ButtonStyle.SECONDARY)
     async def deny(self, ctx: miru.ViewContext, button: miru.Button):
         self.stop()
+
+
+@commands.include
+@crescent.command(name="message")
+class Message:
+    message = crescent.option(str, "what's your message, huh?")
+
+    async def callback(self, ctx: crescent.Context) -> None:
+        try:
+            channel = await ctx.app.rest.create_dm_channel(settings.owner)
+            await channel.send(f"New message: {self.message}")
+        except Exception as e:
+            await ctx.respond(f"Can't do that: {e}", ephemeral=True)
+            return
+
+        await ctx.respond("Okay.", ephemeral=True)
 
 
 @commands.include
