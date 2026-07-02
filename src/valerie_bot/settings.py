@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     bot_token: str
     enable_genai: bool
     enable_api: bool
-    model_config = SettingsConfigDict(toml_file="config.toml")
+    model_config = SettingsConfigDict(toml_file="storage/config.toml")
 
     @classmethod
     def settings_customise_sources(
@@ -32,4 +32,4 @@ class Settings(BaseSettings):
 
 
 settings: Settings = Settings()  # type: ignore
-db = sqlite3.connect("state.db")
+db = sqlite3.connect("storage/state.db")

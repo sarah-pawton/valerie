@@ -2,6 +2,8 @@ import uvicorn
 import hikari
 import asyncio
 
+__version__ = "1.0.0"
+
 from valerie_bot.settings import db, settings
 from valerie_bot.bot import bot
 from valerie_bot.api import app

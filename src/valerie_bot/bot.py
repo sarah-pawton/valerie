@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import logging
+import importlib.metadata
 from typing import cast
 
 import crescent
@@ -9,6 +10,8 @@ import miru
 from hikari.api import ComponentBuilder, MessageActionRowBuilder
 
 from valerie_bot.settings import db, settings
+
+__version__ = importlib.metadata.version('valerie_bot')
 
 bot = hikari.GatewayBot(
     settings.bot_token,
@@ -699,19 +702,39 @@ class Hello:
 
 
 @commands.include
-@crescent.command(name="debug_ratelimits", description="debug ratelimits")
-class Ratelimits:
+@crescent.command(name="version", description="about the bot")
+class Version:
     async def callback(self, ctx: crescent.Context) -> None:
+        me = bot.get_me()
+        assert me
+        
+        hikari_version = importlib.metadata.version('hikari')
+        crescent_version = importlib.metadata.version('hikari-crescent')
         await ctx.respond(
-            "Timeout database: "
-            + "\n\n"
-            + "\n".join(
-                f"- {key}: **{iat}**"
-                for (key, iat) in db.execute(
-                    "SELECT key, iat FROM ratelimits"
-                ).fetchall()
-            ),
-            ephemeral=True,
+            components=[
+                hikari.impl.ContainerComponentBuilder(
+                    components=[
+                        hikari.impl.SectionComponentBuilder(
+                            accessory=hikari.impl.ThumbnailComponentBuilder(
+                                media=me.make_avatar_url() or me.default_avatar_url
+                            ),
+                            components=[
+                                hikari.impl.TextDisplayComponentBuilder(content=f"# **valerie_bot v{__version__}**"),
+                                hikari.impl.TextDisplayComponentBuilder(content=(
+                                    f"API enabled: {settings.enable_api}"
+                                    f"\nGenAI enabled: {settings.enable_genai}"
+                                )),
+                                hikari.impl.TextDisplayComponentBuilder(content=(
+                                    "**Dependencies**"
+                                    f"\n- hikari v{hikari_version}"
+                                    f"\n- crescent v{crescent_version}"
+                                ))
+                            ],
+                        )
+                    ]
+                )
+            ],
+            ephemeral=True
         )
 
 
